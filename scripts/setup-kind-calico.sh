@@ -136,7 +136,7 @@ kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
 # Make kubeconfig universal
 # -------------------------------
 mkdir -p $USER_HOME/.kube
-KIND_KUBECONFIG=$(kind get kubeconfig-path --name dev)
+KIND_KUBECONFIG=$(kind get kubeconfig --name dev)
 sudo cp $KIND_KUBECONFIG $USER_HOME/.kube/config
 sudo chown -R $PRIMARY_USER:$PRIMARY_USER $USER_HOME/.kube
 echo "export KUBECONFIG=$USER_HOME/.kube/config" >> $USER_HOME/.bashrc
