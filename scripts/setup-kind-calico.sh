@@ -113,18 +113,10 @@ fi
 echo "Kubernetes nodes:"
 kubectl get nodes -o wide
 
-# --- Install latest Calico ---
-CALICO_VERSION=$(curl -s https://api.github.com/repos/projectcalico/calico/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
-echo "Latest Calico version: v$CALICO_VERSION"
+# --- Install Calico using KIND-optimized manifest ---
 
-echo "Installing Calico operator CRDs..."
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v$CALICO_VERSION/manifests/operator-crds.yaml
-
-echo "Installing Calico operator..."
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v$CALICO_VERSION/manifests/tigera-operator.yaml
-
-echo "Installing Calico custom resources..."
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v$CALICO_VERSION/manifests/custom-resources.yaml
+echo "Installing Calico CNI (KIND-optimized manifest)..."
+kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
 
 echo "Setup complete! Watching Calico pods..."
 watch kubectl get pods -l k8s-app=calico-node -A
