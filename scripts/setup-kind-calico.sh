@@ -113,6 +113,10 @@ fi
 echo "Kubernetes nodes:"
 kubectl get nodes -o wide
 
+# --- Wait for KIND nodes to be ready ---
+echo "Waiting for all KIND nodes to be Ready..."
+kubectl wait --for=condition=Ready nodes --all --timeout=180s
+
 # --- Install Calico using KIND-optimized manifest ---
 
 echo "Installing Calico CNI (KIND-optimized manifest)..."
