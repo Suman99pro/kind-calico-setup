@@ -8,7 +8,9 @@ set -euo pipefail
 
 echo "=== Starting KIND + Calico setup ==="
 
-# Detect the primary user (real user)
+# -------------------------------
+# Detect primary user
+# -------------------------------
 if [ "$SUDO_USER" ]; then
     PRIMARY_USER=$SUDO_USER
 else
@@ -17,7 +19,9 @@ fi
 USER_HOME=$(eval echo "~$PRIMARY_USER")
 echo "Primary user: $PRIMARY_USER"
 
+# -------------------------------
 # Detect architecture
+# -------------------------------
 ARCH=$(uname -m)
 echo "Detected architecture: $ARCH"
 
@@ -121,7 +125,7 @@ else
 fi
 
 # -------------------------------
-# Wait for nodes to be ready
+# Wait for all nodes to be Ready
 # -------------------------------
 echo "Waiting for all KIND nodes to be Ready..."
 kubectl wait --for=condition=Ready nodes --all --timeout=180s
@@ -133,19 +137,13 @@ echo "Installing Calico CNI..."
 kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
 
 # -------------------------------
-# Make kubeconfig universal
+# Wait for Calico pods automatically
 # -------------------------------
-mkdir -p $USER_HOME/.kube
-KIND_KUBECONFIG=$(kind get kubeconfig --name dev)
-sudo cp $KIND_KUBECONFIG $USER_HOME/.kube/config
-sudo chown -R $PRIMARY_USER:$PRIMARY_USER $USER_HOME/.kube
-echo "export KUBECONFIG=$USER_HOME/.kube/config" >> $USER_HOME/.bashrc
-export KUBECONFIG=$USER_HOME/.kube/config
+echo "Waiting for Calico pods to be Running..."
+MAX_WAIT=180
+SECONDS_WAITED=0
+INTERVAL=5
 
-# -------------------------------
-# Show status
-# -------------------------------
-echo "Waiting for Calico pods to be ready..."
 while true; do
     NOT_READY=$(kubectl get pods -n kube-system -l k8s-app=calico-node \
         -o jsonpath='{.items[?(@.status.phase!="Running")].metadata.name}' | wc -w)
@@ -154,14 +152,33 @@ while true; do
         echo "All Calico pods are running!"
         break
     fi
-    
-    echo "Waiting... $NOT_READY pods not ready yet."
+
     if [ "$SECONDS_WAITED" -ge "$MAX_WAIT" ]; then
-        echo "Timeout reached. Some pods are still not ready:"
+        echo "Timeout reached. Some Calico pods are still not ready:"
         kubectl get pods -n kube-system -l k8s-app=calico-node
         break
     fi
-    
+
+    echo "⏳ Waiting... $NOT_READY Calico pods not ready yet."
     sleep $INTERVAL
     SECONDS_WAITED=$((SECONDS_WAITED + INTERVAL))
 done
+
+# -------------------------------
+# Make kubeconfig universal
+# -------------------------------
+mkdir -p "$USER_HOME/.kube"
+KIND_KUBECONFIG=$(kind get kubeconfig --name dev)
+sudo cp "$KIND_KUBECONFIG" "$USER_HOME/.kube/config"
+sudo chown -R "$PRIMARY_USER:$PRIMARY_USER" "$USER_HOME/.kube"
+echo "export KUBECONFIG=$USER_HOME/.kube/config" >> "$USER_HOME/.bashrc"
+export KUBECONFIG="$USER_HOME/.kube/config"
+
+echo "Kubeconfig is now available for user $PRIMARY_USER"
+
+# -------------------------------
+# Final status
+# -------------------------------
+kubectl get nodes -o wide
+kubectl get pods -A
+echo "=== KIND + Calico setup completed successfully ==="
