@@ -136,7 +136,7 @@ kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
 # Make kubeconfig universal
 # -------------------------------
 mkdir -p $USER_HOME/.kube
-KIND_KUBECONFIG=$(kind get kubeconfig-path --name="dev")
+KIND_KUBECONFIG=$(kind get kubeconfig-path --name dev)
 sudo cp $KIND_KUBECONFIG $USER_HOME/.kube/config
 sudo chown -R $PRIMARY_USER:$PRIMARY_USER $USER_HOME/.kube
 echo "export KUBECONFIG=$USER_HOME/.kube/config" >> $USER_HOME/.bashrc
@@ -155,7 +155,7 @@ while true; do
         break
     fi
     
-    echo "⏳ Waiting... $NOT_READY pods not ready yet."
+    echo "Waiting... $NOT_READY pods not ready yet."
     if [ "$SECONDS_WAITED" -ge "$MAX_WAIT" ]; then
         echo "Timeout reached. Some pods are still not ready:"
         kubectl get pods -n kube-system -l k8s-app=calico-node
