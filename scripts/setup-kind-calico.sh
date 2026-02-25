@@ -1,29 +1,31 @@
 #!/bin/bash
 # Filename: setup-kind-calico.sh
-# Purpose: Setup multi-node KIND cluster with latest Calico CNI
-#          Also ensures Docker is installed and user can run docker without sudo
+# Purpose: Fully automated multi-node KIND cluster with Calico CNI
+#          Works for any Linux user, handles Docker, kubeconfig, and Calico installation
 # Usage: sudo bash setup-kind-calico.sh
 
 set -euo pipefail
 
 echo "=== Starting KIND + Calico setup ==="
 
-# Get the username running the script
+# Detect the primary user (real user)
 if [ "$SUDO_USER" ]; then
-    USERNAME=$SUDO_USER
+    PRIMARY_USER=$SUDO_USER
 else
-    USERNAME=$(whoami)
+    PRIMARY_USER=$(whoami)
 fi
-echo "Running as user: $USERNAME"
+USER_HOME=$(eval echo "~$PRIMARY_USER")
+echo "Primary user: $PRIMARY_USER"
 
 # Detect architecture
 ARCH=$(uname -m)
 echo "Detected architecture: $ARCH"
 
-# --- Install Docker if missing ---
+# -------------------------------
+# Install Docker if missing
+# -------------------------------
 if ! command -v docker &>/dev/null; then
     echo "Docker not found. Installing Docker..."
-    # For Debian/Ubuntu
     if [ -f /etc/debian_version ]; then
         apt-get update
         apt-get install -y ca-certificates curl gnupg lsb-release
@@ -34,13 +36,12 @@ if ! command -v docker &>/dev/null; then
           $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
         apt-get update
         apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-    # For RHEL/CentOS/AlmaLinux
     elif [ -f /etc/redhat-release ]; then
         yum install -y yum-utils
         yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
         yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
     else
-        echo "Unsupported OS for automatic Docker install. Please install Docker manually."
+        echo "Unsupported OS. Please install Docker manually."
         exit 1
     fi
     systemctl enable docker
@@ -49,16 +50,20 @@ else
     echo "Docker is already installed."
 fi
 
-# --- Add user to docker group for passwordless access ---
-if ! groups $USERNAME | grep -q "\bdocker\b"; then
-    echo "Adding $USERNAME to docker group..."
-    usermod -aG docker $USERNAME
-    echo "You may need to log out and log back in for docker group changes to take effect."
+# -------------------------------
+# Add user to Docker group
+# -------------------------------
+if ! groups $PRIMARY_USER | grep -q "\bdocker\b"; then
+    echo "Adding $PRIMARY_USER to docker group..."
+    usermod -aG docker $PRIMARY_USER
+    echo "You may need to log out and log back in for Docker group changes to take effect."
 else
-    echo "$USERNAME is already in the docker group."
+    echo "$PRIMARY_USER is already in the docker group."
 fi
 
-# --- Install KIND ---
+# -------------------------------
+# Install KIND
+# -------------------------------
 if ! command -v kind &>/dev/null; then
     echo "Downloading KIND..."
     if [ "$ARCH" = "x86_64" ]; then
@@ -75,7 +80,9 @@ else
     echo "KIND already installed, skipping download."
 fi
 
-# --- Install kubectl ---
+# -------------------------------
+# Install kubectl
+# -------------------------------
 if ! command -v kubectl &>/dev/null; then
     echo "Downloading kubectl..."
     KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
@@ -87,7 +94,9 @@ else
     echo "kubectl already installed, skipping download."
 fi
 
-# --- Create KIND cluster config ---
+# -------------------------------
+# Create KIND cluster config
+# -------------------------------
 echo "Creating KIND cluster configuration..."
 cat > values.yaml <<EOF
 kind: Cluster
@@ -101,7 +110,9 @@ networking:
   podSubnet: 192.168.0.0/16
 EOF
 
-# --- Create KIND cluster ---
+# -------------------------------
+# Create KIND cluster
+# -------------------------------
 if ! kind get clusters | grep -q "^dev$"; then
     echo "Creating KIND cluster 'dev'..."
     kind create cluster --config values.yaml --name dev
@@ -109,18 +120,48 @@ else
     echo "KIND cluster 'dev' already exists, skipping creation."
 fi
 
-# --- Verify nodes ---
-echo "Kubernetes nodes:"
-kubectl get nodes -o wide
-
-# --- Wait for KIND nodes to be ready ---
+# -------------------------------
+# Wait for nodes to be ready
+# -------------------------------
 echo "Waiting for all KIND nodes to be Ready..."
 kubectl wait --for=condition=Ready nodes --all --timeout=180s
 
-# --- Install Calico using KIND-optimized manifest ---
-
-echo "Installing Calico CNI (KIND-optimized manifest)..."
+# -------------------------------
+# Install Calico CNI (KIND-optimized)
+# -------------------------------
+echo "Installing Calico CNI..."
 kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
 
-echo "Setup complete! Watching Calico pods..."
-watch kubectl get pods -l k8s-app=calico-node -A
+# -------------------------------
+# Make kubeconfig universal
+# -------------------------------
+mkdir -p $USER_HOME/.kube
+KIND_KUBECONFIG=$(kind get kubeconfig-path --name="dev")
+sudo cp $KIND_KUBECONFIG $USER_HOME/.kube/config
+sudo chown -R $PRIMARY_USER:$PRIMARY_USER $USER_HOME/.kube
+echo "export KUBECONFIG=$USER_HOME/.kube/config" >> $USER_HOME/.bashrc
+export KUBECONFIG=$USER_HOME/.kube/config
+
+# -------------------------------
+# Show status
+# -------------------------------
+echo "Waiting for Calico pods to be ready..."
+while true; do
+    NOT_READY=$(kubectl get pods -n kube-system -l k8s-app=calico-node \
+        -o jsonpath='{.items[?(@.status.phase!="Running")].metadata.name}' | wc -w)
+    
+    if [ "$NOT_READY" -eq 0 ]; then
+        echo "All Calico pods are running!"
+        break
+    fi
+    
+    echo "⏳ Waiting... $NOT_READY pods not ready yet."
+    if [ "$SECONDS_WAITED" -ge "$MAX_WAIT" ]; then
+        echo "Timeout reached. Some pods are still not ready:"
+        kubectl get pods -n kube-system -l k8s-app=calico-node
+        break
+    fi
+    
+    sleep $INTERVAL
+    SECONDS_WAITED=$((SECONDS_WAITED + INTERVAL))
+done
