@@ -168,12 +168,11 @@ done
 # Make kubeconfig universal
 # -------------------------------
 mkdir -p "$USER_HOME/.kube"
-KIND_KUBECONFIG=$(kind get kubeconfig --name dev)
-sudo cp "$KIND_KUBECONFIG" "$USER_HOME/.kube/config"
-sudo chown -R "$PRIMARY_USER:$PRIMARY_USER" "$USER_HOME/.kube"
+kind get kubeconfig --name dev > "$USER_HOME/.kube/config"
+Fix permissions
+chown -R "$PRIMARY_USER:$PRIMARY_USER" "$USER_HOME/.kube"
 echo "export KUBECONFIG=$USER_HOME/.kube/config" >> "$USER_HOME/.bashrc"
 export KUBECONFIG="$USER_HOME/.kube/config"
-
 echo "Kubeconfig is now available for user $PRIMARY_USER"
 
 # -------------------------------
