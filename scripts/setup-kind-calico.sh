@@ -1,40 +1,33 @@
 #!/bin/bash
 # Filename: setup-kind-calico.sh
-# Purpose: Fully automated multi-node KIND cluster with Calico CNI
-#          Works for any Linux user, handles Docker, kubeconfig, and Calico installation
+# Purpose: Setup multi-node KIND cluster with Calico CNI
 # Usage: sudo bash setup-kind-calico.sh
 
 set -euo pipefail
 
 echo "=== Starting KIND + Calico setup ==="
 
-# -------------------------------
-# Detect primary user
-# -------------------------------
+# --- Determine primary user ---
 if [ "$SUDO_USER" ]; then
     PRIMARY_USER=$SUDO_USER
 else
     PRIMARY_USER=$(whoami)
 fi
 USER_HOME=$(eval echo "~$PRIMARY_USER")
-echo "Primary user: $PRIMARY_USER"
+echo "Running as user: $PRIMARY_USER, home: $USER_HOME"
 
-# -------------------------------
-# Detect architecture
-# -------------------------------
+# --- Detect architecture ---
 ARCH=$(uname -m)
 echo "Detected architecture: $ARCH"
 
-# -------------------------------
-# Install Docker if missing
-# -------------------------------
+# --- Install Docker if missing ---
 if ! command -v docker &>/dev/null; then
-    echo "Docker not found. Installing Docker..."
+    echo "Docker not found. Installing..."
     if [ -f /etc/debian_version ]; then
         apt-get update
         apt-get install -y ca-certificates curl gnupg lsb-release
         mkdir -p /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/$(. /etc/os-release; echo "$ID")/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        curl -fsSL https://download.docker.com/linux/$(. /etc/os-release; echo "$ID")/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
         echo \
           "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$(. /etc/os-release; echo "$ID") \
           $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
@@ -45,31 +38,27 @@ if ! command -v docker &>/dev/null; then
         yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
         yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
     else
-        echo "Unsupported OS. Please install Docker manually."
+        echo "Unsupported OS for automatic Docker install. Please install Docker manually."
         exit 1
     fi
     systemctl enable docker
     systemctl start docker
 else
-    echo "Docker is already installed."
+    echo "Docker already installed."
 fi
 
-# -------------------------------
-# Add user to Docker group
-# -------------------------------
-if ! groups $PRIMARY_USER | grep -q "\bdocker\b"; then
+# --- Add user to docker group ---
+if ! groups $PRIMARY_USER | grep -qw docker; then
     echo "Adding $PRIMARY_USER to docker group..."
     usermod -aG docker $PRIMARY_USER
-    echo "You may need to log out and log back in for Docker group changes to take effect."
+    echo "Log out and back in for docker group changes to take effect."
 else
-    echo "$PRIMARY_USER is already in the docker group."
+    echo "$PRIMARY_USER already in docker group."
 fi
 
-# -------------------------------
-# Install KIND
-# -------------------------------
+# --- Install KIND ---
 if ! command -v kind &>/dev/null; then
-    echo "Downloading KIND..."
+    echo "Installing KIND..."
     if [ "$ARCH" = "x86_64" ]; then
         curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64
     elif [ "$ARCH" = "aarch64" ]; then
@@ -79,28 +68,24 @@ if ! command -v kind &>/dev/null; then
         exit 1
     fi
     chmod +x ./kind
-    sudo mv ./kind /usr/local/bin/kind
+    mv ./kind /usr/local/bin/kind
 else
-    echo "KIND already installed, skipping download."
+    echo "KIND already installed."
 fi
 
-# -------------------------------
-# Install kubectl
-# -------------------------------
+# --- Install kubectl ---
 if ! command -v kubectl &>/dev/null; then
-    echo "Downloading kubectl..."
+    echo "Installing kubectl..."
     KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
     curl -LO "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"
     curl -LO "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl.sha256"
     echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
-    sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+    install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
 else
-    echo "kubectl already installed, skipping download."
+    echo "kubectl already installed."
 fi
 
-# -------------------------------
-# Create KIND cluster config
-# -------------------------------
+# --- KIND cluster config ---
 echo "Creating KIND cluster configuration..."
 cat > values.yaml <<EOF
 kind: Cluster
@@ -110,74 +95,62 @@ nodes:
 - role: worker
 - role: worker
 networking:
-  disableDefaultCNI: true
   podSubnet: 192.168.0.0/16
 EOF
 
-# -------------------------------
-# Create KIND cluster
-# -------------------------------
-if ! kind get clusters | grep -q "^dev$"; then
+# --- Create KIND cluster ---
+if ! kind get clusters | grep -qw dev; then
     echo "Creating KIND cluster 'dev'..."
-    kind create cluster --config values.yaml --name dev
+    kind create cluster --config values.yaml
 else
-    echo "KIND cluster 'dev' already exists, skipping creation."
+    echo "KIND cluster 'dev' already exists."
 fi
 
-# -------------------------------
-# Wait for all nodes to be Ready
-# -------------------------------
-echo "Waiting for all KIND nodes to be Ready..."
-kubectl wait --for=condition=Ready nodes --all --timeout=180s
-
-# -------------------------------
-# Install Calico CNI (KIND-optimized)
-# -------------------------------
-echo "Installing Calico CNI..."
-kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
-
-# -------------------------------
-# Wait for Calico pods automatically
-# -------------------------------
-echo "Waiting for Calico pods to be Running..."
-MAX_WAIT=180
-SECONDS_WAITED=0
-INTERVAL=5
-
-while true; do
-    NOT_READY=$(kubectl get pods -n kube-system -l k8s-app=calico-node \
-        -o jsonpath='{.items[?(@.status.phase!="Running")].metadata.name}' | wc -w)
-    
-    if [ "$NOT_READY" -eq 0 ]; then
-        echo "All Calico pods are running!"
-        break
-    fi
-
-    if [ "$SECONDS_WAITED" -ge "$MAX_WAIT" ]; then
-        echo "Timeout reached. Some Calico pods are still not ready:"
-        kubectl get pods -n kube-system -l k8s-app=calico-node
-        break
-    fi
-
-    echo "⏳ Waiting... $NOT_READY Calico pods not ready yet."
-    sleep $INTERVAL
-    SECONDS_WAITED=$((SECONDS_WAITED + INTERVAL))
-done
-
-# -------------------------------
-# Make kubeconfig universal
-# -------------------------------
+# --- Save kubeconfig ---
 mkdir -p "$USER_HOME/.kube"
 kind get kubeconfig --name dev > "$USER_HOME/.kube/config"
-Fix permissions
-chown -R "$PRIMARY_USER:$PRIMARY_USER" "$USER_HOME/.kube"
-echo "export KUBECONFIG=$USER_HOME/.kube/config" >> "$USER_HOME/.bashrc"
+chown -R $PRIMARY_USER:$PRIMARY_USER "$USER_HOME/.kube"
 export KUBECONFIG="$USER_HOME/.kube/config"
-echo "Kubeconfig is now available for user $PRIMARY_USER"
 
-# -------------------------------
-# Final status
-# -------------------------------
+# --- Optional: Show nodes (may be NotReady) ---
+echo "KIND cluster nodes (may be NotReady until CNI is installed):"
 kubectl get nodes -o wide
-kubectl get pods -A
-echo "=== KIND + Calico setup completed successfully ==="
+
+# --- Pre-pull Calico images ---
+CALICO_VERSION="v3.31.4"
+CALICO_IMAGES=(
+    calico/node:$CALICO_VERSION
+    calico/kube-controllers:$CALICO_VERSION
+    calico/cni:$CALICO_VERSION
+    calico/pod2daemon-flexvol:$CALICO_VERSION
+)
+echo "Pre-pulling Calico images..."
+for img in "${CALICO_IMAGES[@]}"; do
+    docker pull $img
+    kind load docker-image $img --name dev
+done
+
+# --- Install Calico ---
+echo "Installing Calico operator CRDs..."
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/operator-crds.yaml
+
+echo "Installing Calico operator..."
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/tigera-operator.yaml
+
+echo "Installing Calico custom resources..."
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/custom-resources.yaml
+
+# --- Wait for Calico pods to be Ready ---
+echo "Waiting for all Calico pods to be Ready..."
+while true; do
+    NOT_READY=$(kubectl get pods -n kube-system -l k8s-app=calico-node -o jsonpath='{.items[?(@.status.phase!="Running")].metadata.name}')
+    if [ -z "$NOT_READY" ]; then
+        echo "All Calico pods are Ready!"
+        break
+    fi
+    echo "Still waiting for pods: $NOT_READY"
+    sleep 5
+done
+
+echo "=== KIND + Calico setup complete ==="
+kubectl get pods -n kube-system -l k8s-app=calico-node -o wide
