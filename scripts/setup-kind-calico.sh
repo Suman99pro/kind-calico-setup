@@ -58,7 +58,7 @@ else
     echo "$USERNAME is already in the docker group."
 fi
 
-# --- nstall KIND ---
+# --- Install KIND ---
 if ! command -v kind &>/dev/null; then
     echo "Downloading KIND..."
     if [ "$ARCH" = "x86_64" ]; then
@@ -75,7 +75,7 @@ else
     echo "KIND already installed, skipping download."
 fi
 
-# --- nstall kubectl ---
+# --- Install kubectl ---
 if ! command -v kubectl &>/dev/null; then
     echo "Downloading kubectl..."
     KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
@@ -87,7 +87,7 @@ else
     echo "kubectl already installed, skipping download."
 fi
 
-# --- reate KIND cluster config ---
+# --- Create KIND cluster config ---
 echo "Creating KIND cluster configuration..."
 cat > values.yaml <<EOF
 kind: Cluster
@@ -101,7 +101,7 @@ networking:
   podSubnet: 192.168.0.0/16
 EOF
 
-# --- reate KIND cluster ---
+# --- Create KIND cluster ---
 if ! kind get clusters | grep -q "^dev$"; then
     echo "Creating KIND cluster 'dev'..."
     kind create cluster --config values.yaml --name dev
@@ -109,11 +109,11 @@ else
     echo "KIND cluster 'dev' already exists, skipping creation."
 fi
 
-# ---Verify nodes ---
+# --- Verify nodes ---
 echo "Kubernetes nodes:"
 kubectl get nodes -o wide
 
-# ---Install latest Calico ---
+# --- Install latest Calico ---
 CALICO_VERSION=$(curl -s https://api.github.com/repos/projectcalico/calico/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
 echo "Latest Calico version: v$CALICO_VERSION"
 
