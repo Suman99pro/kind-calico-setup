@@ -112,11 +112,11 @@ kind get kubeconfig --name dev > "$USER_HOME/.kube/config"
 chown -R $PRIMARY_USER:$PRIMARY_USER "$USER_HOME/.kube"
 export KUBECONFIG="$USER_HOME/.kube/config"
 
-# --- Optional: Show nodes (may be NotReady) ---
-echo "KIND cluster nodes (may be NotReady until CNI is installed):"
+# --- Show nodes (may be NotReady until CNI is installed) ---
+echo "KIND cluster nodes:"
 kubectl get nodes -o wide
 
-# --- Pre-pull Calico images ---
+# --- Pre-pull Calico images and load into each KIND node ---
 CALICO_VERSION="v3.31.4"
 CALICO_IMAGES=(
     calico/node:$CALICO_VERSION
@@ -124,10 +124,14 @@ CALICO_IMAGES=(
     calico/cni:$CALICO_VERSION
     calico/pod2daemon-flexvol:$CALICO_VERSION
 )
-echo "Pre-pulling Calico images..."
+
+echo "Pre-pulling Calico images and loading into all KIND nodes..."
 for img in "${CALICO_IMAGES[@]}"; do
     docker pull $img
-    kind load docker-image $img --name dev
+    for node in $(kind get nodes --name dev); do
+        echo "Loading $img into node $node ..."
+        docker save $img | docker exec -i $node ctr -n k8s.io images import -
+    done
 done
 
 # --- Install Calico ---
